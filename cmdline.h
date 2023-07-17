@@ -36,7 +36,9 @@
 #include <typeinfo>
 #include <cstring>
 #include <algorithm>
+#ifndef _MSC_VER
 #include <cxxabi.h>
+#endif
 #include <cstdlib>
 
 namespace cmdline{
@@ -104,11 +106,17 @@ Target lexical_cast(const Source &arg)
 
 static inline std::string demangle(const std::string &name)
 {
+#ifdef _MSC_VER
+  return name;
+#elif defined(__GNUC__)
   int status=0;
   char *p=abi::__cxa_demangle(name.c_str(), 0, 0, &status);
   std::string ret(p);
   free(p);
   return ret;
+#else
+#error unexpected c complier (msvc/gcc)
+#endif
 }
 
 template <class T>
@@ -360,11 +368,19 @@ public:
   }
 
   template <class T>
-  const T &get(const std::string &name) const {
+  size_t count(const std::string &name) const {
     if (options.count(name)==0) throw cmdline_error("there is no flag: --"+name);
     const option_with_value<T> *p=dynamic_cast<const option_with_value<T>*>(options.find(name)->second);
     if (p==NULL) throw cmdline_error("type mismatch flag '"+name+"'");
-    return p->get();
+    return p->count();
+  }
+  
+  template <class T>
+  const T &get(const std::string &name, size_t idx=0) const {
+    if (options.count(name)==0) throw cmdline_error("there is no flag: --"+name);
+    const option_with_value<T> *p=dynamic_cast<const option_with_value<T>*>(options.find(name)->second);
+    if (p==NULL) throw cmdline_error("type mismatch flag '"+name+"'");
+    return p->get(idx);
   }
 
   const std::vector<std::string> &rest() const {
@@ -407,8 +423,8 @@ public:
     if (buf.length()>0)
       args.push_back(buf);
 
-    for (size_t i=0; i<args.size(); i++)
-      std::cout<<"\""<<args[i]<<"\""<<std::endl;
+    // for (size_t i=0; i<args.size(); i++)
+    //   std::cout<<"\""<<args[i]<<"\""<<std::endl;
 
     return parse(args);
   }
@@ -533,7 +549,7 @@ public:
   void parse_check(const std::vector<std::string> &args){
     if (!options.count("help"))
       add("help", '?', "print this message");
-    check(args.size(), parse(args));
+    check(int(args.size()), parse(args));
   }
 
   void parse_check(int argc, char *argv[]){
@@ -566,7 +582,7 @@ public:
 
     size_t max_width=0;
     for (size_t i=0; i<ordered.size(); i++){
-      max_width=std::max(max_width, ordered[i]->name().length());
+      max_width=(std::max)(max_width, ordered[i]->name().length());
     }
     for (size_t i=0; i<ordered.size(); i++){
       if (ordered[i]->short_name()){
@@ -701,13 +717,16 @@ private:
                       const T &def,
                       const std::string &desc)
       : nam(name), snam(short_name), need(need), has(false)
-      , def(def), actual(def) {
+      , def(def){
+        actuals.push_back(def);
       this->desc=full_description(desc);
     }
     ~option_with_value(){}
 
-    const T &get() const {
-      return actual;
+    const T &get(size_t idx) const {
+      if(idx>=actuals.size()) throw cmdline::cmdline_error("index_outrange_error");
+      tmp= actuals[idx];
+      return tmp;
     }
 
     bool has_value() const { return true; }
@@ -718,19 +737,21 @@ private:
 
     bool set(const std::string &value){
       try{
-        actual=read(value);
+        auto actual=read(value);
+        if(!has){actuals.clear();}
+        actuals.push_back(actual);
         has=true;
       }
-      catch(const std::exception &e){
+      catch(const std::exception &){
         return false;
       }
       return true;
     }
-
+    
     bool has_set() const{
       return has;
     }
-
+    size_t count()const{return actuals.size();}
     bool valid() const{
       if (need && !has) return false;
       return true;
@@ -773,7 +794,8 @@ private:
 
     bool has;
     T def;
-    T actual;
+    mutable  T tmp;
+    std::vector<T> actuals;
   };
 
   template <class T, class F>
